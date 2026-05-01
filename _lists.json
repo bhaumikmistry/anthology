@@ -1,5 +1,17 @@
 {
   "default": { "label": "General", "emoji": "📋" },
   "boston": { "label": "Boston", "emoji": "🦞" },
-  "mumbai": { "label": "Mumbai", "emoji": "🇮🇳" }
+  "mumbai": { "label": "Mumbai", "emoji": "🇮🇳" },
+  "london": { "label": "London", "emoji": "🇬🇧" },
+  "bangkok": { "label": "Bangkok", "emoji": "🇹🇭" },
+  "california": { "label": "California", "emoji": "☀️" },
+  "connecticut": { "label": "Connecticut", "emoji": "🌿" },
+  "colorado": { "label": "Colorado", "emoji": "🏔️" },
+  "maine": { "label": "Maine", "emoji": "🦞" },
+  "newport": { "label": "Newport", "emoji": "⛵" },
+  "new-orleans": { "label": "New Orleans", "emoji": "🎺" },
+  "houston": { "label": "Houston", "emoji": "🤠" },
+  "new-york": { "label": "New York", "emoji": "🗽" },
+  "new-hampshire": { "label": "New Hampshire", "emoji": "🏔️" },
+  "tennessee": { "label": "Tennessee", "emoji": "🎸" }
 }
