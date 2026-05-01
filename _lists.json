@@ -1,0 +1,5 @@
+{
+  "default": { "label": "General", "emoji": "📋" },
+  "boston": { "label": "Boston", "emoji": "🦞" },
+  "mumbai": { "label": "Mumbai", "emoji": "🇮🇳" }
+}
