@@ -1,0 +1,158 @@
+name: Review & Auto-Merge
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Review with Nova AI
+        uses: actions/github-script@v7
+        env:
+          NOVA_API_KEY: ${{ secrets.NOVA_API_KEY }}
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Get changed files
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            const jsonFile = files.find(f => f.filename.endsWith('.json') && f.status === 'added');
+            if (!jsonFile) {
+              console.log('No new JSON file found, skipping');
+              return;
+            }
+
+            // Read the submitted entry
+            let entry;
+            try {
+              entry = JSON.parse(fs.readFileSync(jsonFile.filename, 'utf-8'));
+            } catch (e) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `❌ **Auto-Review Failed**\n\nCould not parse \`${jsonFile.filename}\` as valid JSON.\n\n\`\`\`\n${e.message}\n\`\`\``
+              });
+              return;
+            }
+
+            const validTypes = ['poem', 'shayari', 'link', 'image', 'thought', 'book', 'movie', 'food', 'place'];
+            const type = entry.type || 'unknown';
+            const title = entry.title || '';
+            const content = entry.content || '';
+
+            // Call Nova 2 Lite to review
+            const prompt = `You are a content reviewer for a personal anthology app. A user submitted a new "${type}" entry.
+
+            Entry details:
+            - Type: ${type}
+            - Title: ${title}
+            - Content: ${content}
+            - URL: ${entry.url || 'none'}
+            - Tags: ${(entry.tags || []).join(', ') || 'none'}
+
+            Valid types are: ${validTypes.join(', ')}
+
+            Review this submission and decide:
+            1. Is the type valid?
+            2. Does it have meaningful content (not empty/gibberish)?
+            3. Is it appropriate (no spam, offensive content, or harmful material)?
+
+            Respond with EXACTLY one of these two formats:
+            APPROVE: <one line reason>
+            REJECT: <one line reason>`;
+
+            let decision = 'REJECT';
+            let reason = 'Nova API call failed';
+
+            try {
+              const resp = await fetch('https://api.nova.amazon.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${process.env.NOVA_API_KEY}`,
+                },
+                body: JSON.stringify({
+                  model: 'nova-2-lite-v1',
+                  messages: [
+                    { role: 'system', content: 'You are a strict but fair content reviewer. Respond only with APPROVE or REJECT followed by a colon and a brief reason.' },
+                    { role: 'user', content: prompt }
+                  ],
+                  temperature: 0.3,
+                  max_tokens: 100,
+                }),
+              });
+
+              if (!resp.ok) {
+                const err = await resp.text();
+                reason = `Nova API error (${resp.status}): ${err.slice(0, 200)}`;
+              } else {
+                const data = await resp.json();
+                const reply = (data.choices?.[0]?.message?.content || '').trim();
+                console.log('Nova response:', reply);
+
+                if (reply.startsWith('APPROVE')) {
+                  decision = 'APPROVE';
+                  reason = reply.replace(/^APPROVE:\s*/, '');
+                } else if (reply.startsWith('REJECT')) {
+                  decision = 'REJECT';
+                  reason = reply.replace(/^REJECT:\s*/, '');
+                } else {
+                  // Ambiguous response — don't auto-merge
+                  decision = 'REJECT';
+                  reason = `Unclear AI response: ${reply.slice(0, 200)}`;
+                }
+              }
+            } catch (e) {
+              reason = `Nova API exception: ${e.message}`;
+            }
+
+            if (decision === 'APPROVE') {
+              // Comment approval
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `✅ **Auto-Review Approved**\n\n${reason}\n\n---\n*Reviewed by Amazon Nova 2 Lite*`
+              });
+
+              // Merge the PR
+              try {
+                await github.rest.pulls.merge({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.issue.number,
+                  merge_method: 'squash',
+                });
+                console.log('PR merged successfully');
+              } catch (e) {
+                console.log('Merge failed:', e.message);
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `⚠️ Approved but merge failed: ${e.message}`
+                });
+              }
+            } else {
+              // Comment rejection
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `❌ **Auto-Review Rejected**\n\n${reason}\n\n---\n*Reviewed by Amazon Nova 2 Lite. If you believe this is wrong, a maintainer can manually merge.*`
+              });
+            }
