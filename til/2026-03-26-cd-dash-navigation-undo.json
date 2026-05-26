@@ -3,8 +3,12 @@
   "type": "til",
   "list": "default",
   "title": "cd - is a navigation undo",
-  "content": "cd - takes you back to your previous directory, like a navigation undo in the terminal. No more spamming cd .. or retyping full paths. Same pattern works with git checkout - to switch to your previous branch.",
+  "content": "`cd -` takes you back to your previous directory, like a navigation undo in the terminal. No more spamming `cd ..` or retyping full paths. Same pattern works with `git checkout -` to switch to your previous branch.",
   "url": "",
-  "tags": ["terminal", "bash", "git"],
+  "tags": [
+    "terminal",
+    "bash",
+    "git"
+  ],
   "date": "2026-03-26T00:00:00.000Z"
 }
