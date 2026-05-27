@@ -58,9 +58,21 @@ jobs:
               return (data.choices?.[0]?.message?.content || '').trim();
             }
 
-            // --- TIL-specific: auto-generate tags and detect code ---
+            // --- TIL-specific: auto-generate title, tags, and detect code ---
             let tilEnhanced = false;
             if (type === 'til') {
+              // Auto-generate title if missing
+              if (!entry.title || entry.title.length < 3) {
+                const titleReply = await callNova([
+                  { role: 'system', content: 'Generate a short, punchy title (max 8 words) for this TIL entry. Output ONLY the title, nothing else.' },
+                  { role: 'user', content: `Content: ${content}` }
+                ], 30);
+                if (titleReply) {
+                  entry.title = titleReply.replace(/^["']|["']$/g, '');
+                  tilEnhanced = true;
+                }
+              }
+
               const tagPrompt = `You are a tagging assistant. Given this TIL (Today I Learned) entry, generate 1-3 specific tags. Not generic tags like "learning" or "programming". Be specific to the actual topic.
 
             Content: ${content}
@@ -145,7 +157,7 @@ jobs:
               });
 
               let body = `✅ **Auto-Review Approved**\n\n${reason}`;
-              if (tilEnhanced) body += `\n\n📝 *Enhanced: auto-generated tags [${entry.tags.join(', ')}]*`;
+              if (tilEnhanced) body += `\n\n📝 *Enhanced: ${entry.title ? 'title "' + entry.title + '", ' : ''}tags [${entry.tags.join(', ')}]*`;
               body += `\n\n---\n*Reviewed by Amazon Nova 2 Lite*`;
 
               await github.rest.issues.createComment({
