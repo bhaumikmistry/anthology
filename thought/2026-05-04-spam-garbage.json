@@ -1,0 +1,10 @@
+{
+  "id": "test-bad-001",
+  "type": "invalidtype",
+  "list": "default",
+  "title": "",
+  "content": "BUY CHEAP PILLS NOW!!! Visit http://spam-site.xyz for FREE MONEY. This is garbage spam content with no value. @#$%^&*",
+  "url": "http://spam-site.xyz",
+  "tags": ["spam", "scam"],
+  "date": "2026-05-04T12:00:00.000Z"
+}
