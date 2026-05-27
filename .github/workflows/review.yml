@@ -22,7 +22,6 @@ jobs:
           script: |
             const fs = require('fs');
 
-            // Get changed files
             const { data: files } = await github.rest.pulls.listFiles({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -30,139 +29,150 @@ jobs:
             });
 
             const jsonFile = files.find(f => f.filename.endsWith('.json') && f.status === 'added');
-            if (!jsonFile) {
-              console.log('No new JSON file found, skipping');
-              return;
-            }
+            if (!jsonFile) { console.log('No new JSON file, skipping'); return; }
 
-            // Read the submitted entry
             let entry;
             try {
               entry = JSON.parse(fs.readFileSync(jsonFile.filename, 'utf-8'));
             } catch (e) {
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: context.issue.number,
                 body: `❌ **Auto-Review Failed**\n\nCould not parse \`${jsonFile.filename}\` as valid JSON.\n\n\`\`\`\n${e.message}\n\`\`\``
               });
               return;
             }
 
-            const validTypes = ['poem', 'shayari', 'link', 'image', 'thought', 'book', 'movie', 'food', 'place'];
+            const validTypes = ['poem', 'shayari', 'link', 'image', 'thought', 'book', 'movie', 'food', 'place', 'til'];
             const type = entry.type || 'unknown';
-            const title = entry.title || '';
             const content = entry.content || '';
 
-            // Call Nova 2 Lite to review
-            const prompt = `You are a content reviewer for a personal anthology app. A user submitted a new "${type}" entry.
+            async function callNova(messages, maxTokens = 100) {
+              const resp = await fetch('https://api.nova.amazon.com/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.NOVA_API_KEY}` },
+                body: JSON.stringify({ model: 'nova-2-lite-v1', messages, temperature: 0.3, max_tokens: maxTokens }),
+              });
+              if (!resp.ok) return null;
+              const data = await resp.json();
+              return (data.choices?.[0]?.message?.content || '').trim();
+            }
+
+            // --- TIL-specific: auto-generate tags and detect code ---
+            let tilEnhanced = false;
+            if (type === 'til') {
+              const tagPrompt = `You are a tagging assistant. Given this TIL (Today I Learned) entry, generate 1-3 specific tags. Not generic tags like "learning" or "programming". Be specific to the actual topic.
+
+            Content: ${content}
+            Existing tags: ${(entry.tags || []).join(', ') || 'none'}
+
+            Rules:
+            - If existing tags are good and specific, keep them as-is
+            - If no tags or too generic, generate 1-3 specific ones
+            - Output ONLY a comma-separated list of tags, nothing else
+            - Examples of good tags: "bash", "git-workflow", "css-grid", "python-decorators", "docker-networking"
+            - Examples of bad tags: "coding", "tech", "useful", "tip"`;
+
+              const tagReply = await callNova([
+                { role: 'system', content: 'Output only comma-separated tags. No explanation.' },
+                { role: 'user', content: tagPrompt }
+              ], 50);
+
+              if (tagReply) {
+                const newTags = tagReply.split(',').map(t => t.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')).filter(t => t.length > 1).slice(0, 3);
+                if (newTags.length > 0 && (!entry.tags || entry.tags.length === 0 || entry.tags.some(t => ['learning', 'tip', 'useful', 'coding', 'tech'].includes(t)))) {
+                  entry.tags = newTags;
+                  tilEnhanced = true;
+                }
+              }
+
+              // Detect if content contains a command and wrap in backticks if not already
+              if (content.match(/\b(cd|git|npm|pnpm|docker|kubectl|curl|wget|ssh|ls|grep|awk|sed|cat|echo|mkdir|rm|cp|mv)\s/) && !content.includes('`')) {
+                // Find command-like words and wrap them
+                entry.content = content.replace(/\b(cd -|cd \.\.|git checkout -|git stash|git rebase|npm install|pnpm dev|docker run|kubectl get|curl -[sLX])\b/g, '`$1`');
+                tilEnhanced = true;
+              }
+
+              if (tilEnhanced) {
+                fs.writeFileSync(jsonFile.filename, JSON.stringify(entry, null, 2));
+              }
+            }
+
+            // --- Review ---
+            const reviewPrompt = `You are a content reviewer for a personal anthology app. A user submitted a new "${type}" entry.
 
             Entry details:
             - Type: ${type}
-            - Title: ${title}
             - Content: ${content}
-            - URL: ${entry.url || 'none'}
             - Tags: ${(entry.tags || []).join(', ') || 'none'}
 
             Valid types are: ${validTypes.join(', ')}
 
-            Review this submission and decide:
-            1. Is the type valid?
-            2. Does it have meaningful content (not empty/gibberish)?
-            3. Is it appropriate (no spam, offensive content, or harmful material)?
+            Review: Is the type valid? Is there meaningful content? Is it appropriate (no spam/offensive)?
 
-            Respond with EXACTLY one of these two formats:
+            Respond with EXACTLY one format:
             APPROVE: <one line reason>
             REJECT: <one line reason>`;
 
             let decision = 'REJECT';
             let reason = 'Nova API call failed';
 
-            try {
-              const resp = await fetch('https://api.nova.amazon.com/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${process.env.NOVA_API_KEY}`,
-                },
-                body: JSON.stringify({
-                  model: 'nova-2-lite-v1',
-                  messages: [
-                    { role: 'system', content: 'You are a strict but fair content reviewer. Respond only with APPROVE or REJECT followed by a colon and a brief reason.' },
-                    { role: 'user', content: prompt }
-                  ],
-                  temperature: 0.3,
-                  max_tokens: 100,
-                }),
-              });
+            const reply = await callNova([
+              { role: 'system', content: 'Respond only with APPROVE or REJECT followed by a colon and a brief reason.' },
+              { role: 'user', content: reviewPrompt }
+            ]);
 
-              if (!resp.ok) {
-                const err = await resp.text();
-                reason = `Nova API error (${resp.status}): ${err.slice(0, 200)}`;
-              } else {
-                const data = await resp.json();
-                const reply = (data.choices?.[0]?.message?.content || '').trim();
-                console.log('Nova response:', reply);
-
-                if (reply.startsWith('APPROVE')) {
-                  decision = 'APPROVE';
-                  reason = reply.replace(/^APPROVE:\s*/, '');
-                } else if (reply.startsWith('REJECT')) {
-                  decision = 'REJECT';
-                  reason = reply.replace(/^REJECT:\s*/, '');
-                } else {
-                  // Ambiguous response — don't auto-merge
-                  decision = 'REJECT';
-                  reason = `Unclear AI response: ${reply.slice(0, 200)}`;
-                }
-              }
-            } catch (e) {
-              reason = `Nova API exception: ${e.message}`;
+            if (reply) {
+              if (reply.startsWith('APPROVE')) { decision = 'APPROVE'; reason = reply.replace(/^APPROVE:\s*/, ''); }
+              else if (reply.startsWith('REJECT')) { decision = 'REJECT'; reason = reply.replace(/^REJECT:\s*/, ''); }
+              else { reason = `Unclear AI response: ${reply.slice(0, 200)}`; }
             }
 
             if (decision === 'APPROVE') {
-              // Label + comment
+              // If TIL was enhanced, commit the changes
+              if (tilEnhanced) {
+                const { execSync } = require('child_process');
+                execSync(`git config user.name "github-actions[bot]"`);
+                execSync(`git config user.email "github-actions[bot]@users.noreply.github.com"`);
+                execSync(`git add "${jsonFile.filename}"`);
+                execSync(`git commit -m "Auto-enhance TIL: add tags and format code" --allow-empty`);
+                execSync(`git push`);
+              }
+
               await github.rest.issues.addLabels({
                 owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: context.issue.number, labels: ['approved']
               });
+
+              let body = `✅ **Auto-Review Approved**\n\n${reason}`;
+              if (tilEnhanced) body += `\n\n📝 *Enhanced: auto-generated tags [${entry.tags.join(', ')}]*`;
+              body += `\n\n---\n*Reviewed by Amazon Nova 2 Lite*`;
+
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: `✅ **Auto-Review Approved**\n\n${reason}\n\n---\n*Reviewed by Amazon Nova 2 Lite*`
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body
               });
 
-              // Merge the PR
               try {
                 await github.rest.pulls.merge({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  pull_number: context.issue.number,
-                  merge_method: 'squash',
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  pull_number: context.issue.number, merge_method: 'squash',
                 });
-                console.log('PR merged successfully');
               } catch (e) {
-                console.log('Merge failed:', e.message);
                 await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
+                  owner: context.repo.owner, repo: context.repo.repo,
                   issue_number: context.issue.number,
                   body: `⚠️ Approved but merge failed: ${e.message}`
                 });
               }
             } else {
-              // Label based on reason
               const isSpam = reason.toLowerCase().includes('spam') || reason.toLowerCase().includes('offensive');
-              const label = isSpam ? 'spam' : 'needs-review';
               await github.rest.issues.addLabels({
                 owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: context.issue.number, labels: [label, 'rejected']
+                issue_number: context.issue.number, labels: [isSpam ? 'spam' : 'needs-review', 'rejected']
               });
-              // Comment rejection
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: context.issue.number,
                 body: `❌ **Auto-Review Rejected**\n\n${reason}\n\n---\n*Reviewed by Amazon Nova 2 Lite. If you believe this is wrong, a maintainer can manually merge.*`
               });
