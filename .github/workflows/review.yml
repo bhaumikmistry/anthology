@@ -61,16 +61,14 @@ jobs:
             // --- TIL-specific: auto-generate title, tags, and detect code ---
             let tilEnhanced = false;
             if (type === 'til') {
-              // Auto-generate title if missing
-              if (!entry.title || entry.title.length < 3) {
-                const titleReply = await callNova([
-                  { role: 'system', content: 'Generate a short, punchy title (max 8 words) for this TIL entry. Output ONLY the title, nothing else.' },
-                  { role: 'user', content: `Content: ${content}` }
-                ], 30);
-                if (titleReply) {
-                  entry.title = titleReply.replace(/^["']|["']$/g, '');
-                  tilEnhanced = true;
-                }
+              // Auto-generate title (always for TIL, Nova decides)
+              const titleReply = await callNova([
+                { role: 'system', content: 'Generate a short, punchy title (max 8 words) for this TIL entry. Output ONLY the title, nothing else. No quotes.' },
+                { role: 'user', content: `Content: ${content}` }
+              ], 30);
+              if (titleReply) {
+                entry.title = titleReply.replace(/^["']|["']$/g, '');
+                tilEnhanced = true;
               }
 
               const tagPrompt = `You are a tagging assistant. Given this TIL (Today I Learned) entry, generate 1-3 specific tags. Not generic tags like "learning" or "programming". Be specific to the actual topic.
